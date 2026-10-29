@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link2, Ticket } from 'lucide-react'
 import MSheet from '../../../components/MSheet'
 import { MBookingCodeStatus, MBookingNotes, MBookingTravelers } from './MBookingFields'
@@ -9,7 +9,7 @@ import CustomTimePicker from '../../../../components/shared/CustomTimePicker'
 import { CustomDatePicker } from '../../../../components/shared/CustomDateTimePicker'
 import { Eyebrow, FIELD_CLS, FormSheetFooter, FormSheetHeader } from './PlSheetChrome'
 import MBookingFilesCosts from './MBookingFilesCosts'
-import { expenseRequestAfterSave, travelerIdsOf, travelersChanged, filesNeedConnection, uploadBookingFiles } from '../../../../components/Planner/bookingFormModel'
+import { expenseRequestAfterSave, travelerIdsOf, travelersChanged, filesNeedConnection } from '../../../../components/Planner/bookingFormModel'
 import { useBookingExpenseIntent } from '../../../../components/Planner/useBookingExpenseIntent'
 import {
   RESERVATION_TYPE_OPTIONS as TYPE_OPTIONS, reservationFieldsFrom, reservationFieldsFromPrefill, selectedDayDate,
@@ -70,6 +70,7 @@ export default function MReservationSheet({ planner, onOpenExpense }: MReservati
 
   // Ref (not state) so handleSubmit reads the intent set by the same click.
   const expense = useBookingExpenseIntent(() => handleSubmit())
+  const savedDraftId = useRef<number | null>(null)
   // Open-time snapshot so the sheet content survives the exit animation.
   const [snap, setSnap] = useState<{ res: typeof editingReservation; assignmentId: number | null }>(
     { res: null, assignmentId: null },
@@ -81,6 +82,7 @@ export default function MReservationSheet({ planner, onOpenExpense }: MReservati
 
   useEffect(() => {
     if (!showReservationModal) return
+    savedDraftId.current = null
     setSnap({ res: editingReservation, assignmentId: bookingForAssignmentId ?? null })
     setAssignmentId(bookingForAssignmentId ?? editingReservation?.assignment_id ?? '')
     expense.reset()
@@ -152,17 +154,22 @@ export default function MReservationSheet({ planner, onOpenExpense }: MReservati
     const withExpense = expense.take()
     setIsSaving(true)
     try {
-      const saveData = buildSaveData({ assignmentId, isEdit: !!snap.res?.id, withCheckInEnd: false })
+      const saveData = buildSaveData({ assignmentId, isEdit: !!snap.res?.id || !!savedDraftId.current, withCheckInEnd: false })
+      const extras = saveData as Record<string, unknown>
+      if (savedDraftId.current) extras._retryReservationId = savedDraftId.current
+      if (pendingFiles.length > 0 && canUploadFiles) {
+        extras._pendingFiles = pendingFiles
+        extras._onReservationSaved = (saved: { id: number }) => { savedDraftId.current = saved.id }
+        extras._onFileUploaded = (file: File) => setPendingFiles(prev => prev.filter(f => f !== file))
+      }
       const saved = await handleSaveReservation(saveData as never)
+      if (saved?.id) savedDraftId.current = null
       // Persist the traveler assignment once we have the reservation id (from the
       // save result on create, or the edited reservation) — only when it changed.
       const savedId = saved?.id ?? res?.id
       if (savedId) {
         const { changed, nextIds } = travelersChanged(res, travelerIds)
         if (changed) await setReservationTravelers(tripId, savedId, nextIds)
-      }
-      if (saved?.id && canUploadFiles) {
-        await uploadBookingFiles(fd => planner.tripActions.addFile(tripId, fd), saved.id, pendingFiles, form.title)
       }
       const expenseRequest = expenseRequestAfterSave(withExpense, saved, form, days)
       if (expenseRequest) onOpenExpense(expenseRequest)

@@ -502,13 +502,15 @@ describe('ReservationModal', () => {
     expect(screen.getByPlaceholderText(/e\.g\. ABC12345/i)).toBeInTheDocument();
   });
 
-  it('FE-PLANNER-RESMODAL-036: file upload to existing reservation calls onFileUpload', async () => {
+  it('FE-PLANNER-RESMODAL-036: file selected on an existing reservation stays visible and is handed to save', async () => {
     const onFileUpload = vi.fn().mockResolvedValue(undefined);
+    const onSave = vi.fn().mockResolvedValue(undefined);
     const res = buildReservation({ id: 10, title: 'My Trip', type: 'other' });
     render(
       <ReservationModal
         {...defaultProps}
         reservation={res}
+        onSave={onSave}
         onFileUpload={onFileUpload}
       />
     );
@@ -517,11 +519,12 @@ describe('ReservationModal', () => {
     const testFile = new File(['content'], 'boarding-pass.pdf', { type: 'application/pdf' });
     fireEvent.change(fileInput, { target: { files: [testFile] } });
 
-    await waitFor(() => expect(onFileUpload).toHaveBeenCalled());
-    const [fd] = onFileUpload.mock.calls[0] as [FormData];
-    expect(fd.get('file')).toBeTruthy();
-    // FormData.append coerces numbers to strings
-    expect(fd.get('reservation_id')).toBe('10');
+    expect(await screen.findByText('boarding-pass.pdf')).toBeInTheDocument();
+    expect(onFileUpload).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: /Update/i }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0]._pendingFiles).toEqual([testFile]);
   });
 
   it('FE-PLANNER-RESMODAL-037: link existing file button appears when unattached files exist', () => {
@@ -1063,7 +1066,7 @@ describe('ReservationModal', () => {
     expect(onSave.mock.calls[0][0].create_budget_entry).toBeUndefined();
   });
 
-  it('FE-PLANNER-RESMODAL-062: the parsed source document is seeded as a pending file and uploaded after save', async () => {
+  it('FE-PLANNER-RESMODAL-062: pending documents travel with the booking save so the parent can upload before closing', async () => {
     const onSave = vi.fn().mockResolvedValue({ id: 81 });
     const onFileUpload = vi.fn().mockResolvedValue(undefined);
     const sourceFile = new File(['x'], 'booking.pdf', { type: 'application/pdf' });
@@ -1081,10 +1084,9 @@ describe('ReservationModal', () => {
     expect(screen.getByText('booking.pdf')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
-    await waitFor(() => expect(onFileUpload).toHaveBeenCalled());
-    const [fd] = onFileUpload.mock.calls[0] as [FormData];
-    expect(fd.get('reservation_id')).toBe('81');
-    expect(fd.get('description')).toBe('Hotel Adlon');
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave.mock.calls[0][0]._pendingFiles).toEqual([sourceFile]);
+    expect(onFileUpload).not.toHaveBeenCalled();
   });
 
   // ── Existing-reservation end date/time parsing ──────────────────────────────
@@ -1466,18 +1468,17 @@ describe('ReservationModal', () => {
     expect(screen.getByRole('button', { name: /Attach file/i })).toBeInTheDocument();
   });
 
-  it('FE-PLANNER-RESMODAL-078: a failing upload to an existing booking shows the upload error', async () => {
-    const addToast = vi.fn();
-    window.__addToast = addToast;
-    const onFileUpload = vi.fn().mockRejectedValue(new Error('disk full'));
+  it('FE-PLANNER-RESMODAL-078: a handled save failure leaves the selected file visible for retry', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
     const res = buildReservation({ id: 12, title: 'My Trip', type: 'other' });
 
-    render(<ReservationModal {...defaultProps} reservation={res} onFileUpload={onFileUpload} />);
+    render(<ReservationModal {...defaultProps} reservation={res} onSave={onSave} />);
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(fileInput, { target: { files: [new File(['x'], 'fail.pdf', { type: 'application/pdf' })] } });
 
-    await waitFor(() => expect(addToast).toHaveBeenCalledWith('Failed to upload', 'error', undefined));
-    delete window.__addToast;
+    await userEvent.click(screen.getByRole('button', { name: /Update/i }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('fail.pdf')).toBeInTheDocument();
   });
 
   it('FE-PLANNER-RESMODAL-079: a failing unlink reports the update error but still drops the row', async () => {

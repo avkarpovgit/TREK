@@ -9,7 +9,7 @@ import { findOnMap, stayQueries } from '../../repo/mapMatchRepo'
 import { useBackgroundTasksStore } from '../../store/backgroundTasksStore'
 import type { TripStoreState } from '../../store/tripStore'
 import { isEffectivelyOffline } from '../../sync/networkMode'
-import type { Accommodation, Place } from '../../types'
+import type { Accommodation, Place, Reservation } from '../../types'
 import type { Can, PlannerBase } from './plannerTypes'
 import type { PlannerDialogs } from './usePlannerDialogs'
 
@@ -59,6 +59,22 @@ export function useBookingEdits(options: BookingEditsOptions) {
 
   const handleSaveReservation = async (data: Record<string, string | number | null> & { title: string }) => {
     try {
+      const { _pendingFiles, _retryReservationId, _onReservationSaved, _onFileUploaded, ...payload } = data as Record<string, unknown>
+      data = payload as typeof data
+      const pendingFiles = canUploadFiles && Array.isArray(_pendingFiles) ? _pendingFiles as File[] : []
+      const reservationId = editingReservation?.id ?? (typeof _retryReservationId === 'number' ? _retryReservationId : null)
+      const uploadPendingFiles = async (saved: Reservation, bookingId = saved?.id) => {
+        if (!bookingId) return
+        if (typeof _onReservationSaved === 'function') _onReservationSaved({ ...saved, id: bookingId })
+        for (const file of pendingFiles) {
+          const fd = new FormData()
+          fd.append('file', file)
+          fd.append('reservation_id', String(bookingId))
+          fd.append('description', data.title)
+          await tripActions.addFile(tripId, fd)
+          if (typeof _onFileUploaded === 'function') _onFileUploaded(file)
+        }
+      }
       // Imported hotel with a reviewed address but no existing place picked: match
       // an existing place by name, else geocode the address and create one, then link it.
       const acc = (data as Record<string, any>).create_accommodation
@@ -81,13 +97,14 @@ export function useBookingEdits(options: BookingEditsOptions) {
         }
         delete acc.address
       }
-      if (editingReservation) {
+      if (reservationId) {
         // Don't force a day here. The old code pinned it to the (often empty)
         // selected day, which dropped the booking out of the Plan; preserving the
         // old day_id instead left it stale when the date changed. Omitting it lets
         // the server derive the day from the booking's date, or keep the current
         // one when there is no date.
-        const r = await tripActions.updateReservation(tripId, editingReservation.id, data)
+        const r = await tripActions.updateReservation(tripId, reservationId, data)
+        await uploadPendingFiles(r, reservationId)
         toast.success(t('trip.toast.reservationUpdated'))
         setShowReservationModal(false)
         setEditingReservation(null)
@@ -97,6 +114,7 @@ export function useBookingEdits(options: BookingEditsOptions) {
         return r
       } else {
         const r = await tripActions.addReservation(tripId, { ...data, day_id: selectedDayId || null })
+        await uploadPendingFiles(r)
         toast.success(t('trip.toast.reservationAdded'))
         setShowReservationModal(false)
         // An imported booking auto-creates a linked cost server-side; the saving client gets

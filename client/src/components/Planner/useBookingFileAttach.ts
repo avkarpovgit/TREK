@@ -12,6 +12,8 @@ export interface BookingFileAttachOptions {
   files: TripFile[];
   onFileUpload?: (fd: FormData) => Promise<unknown>;
   setPendingFiles: Dispatch<SetStateAction<File[]>>;
+  /** Keep selected files until the booking's save/upload pipeline succeeds. */
+  deferUpload?: boolean;
   /** The toast and translate the dialog already holds. */
   toast: { success: (message: string) => void; error: (message: string) => void };
   t: (key: string) => string;
@@ -27,6 +29,7 @@ export function useBookingFileAttach({
   files,
   onFileUpload,
   setPendingFiles,
+  deferUpload = false,
   toast,
   t,
 }: BookingFileAttachOptions) {
@@ -36,6 +39,11 @@ export function useBookingFileAttach({
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (deferUpload) {
+      setPendingFiles((prev) => [...prev, file]);
+      e.target.value = '';
+      return;
+    }
     if (reservation?.id && isEffectivelyOffline()) {
       // A file goes up at once on a saved booking, and an upload cannot wait in
       // the offline queue.

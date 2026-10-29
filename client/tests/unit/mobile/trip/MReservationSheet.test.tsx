@@ -708,7 +708,7 @@ describe('MReservationSheet', () => {
 
   // ── Files, costs, errors ───────────────────────────────────────────────────
 
-  it('FE-MOB-RESSH-036: attached files are uploaded against the new booking', async () => {
+  it('FE-MOB-RESSH-036: selected files travel through the booking save pipeline', async () => {
     const { planner } = setup()
     type(titleField(), 'Flight docs')
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
@@ -716,12 +716,11 @@ describe('MReservationSheet', () => {
     expect(screen.getByText('a.pdf')).toBeInTheDocument()
     fireEvent.click(submitBtn())
 
-    await waitFor(() => expect(planner.tripActions.addFile).toHaveBeenCalledTimes(2))
-    const [tripId, fd] = vi.mocked(planner.tripActions.addFile).mock.calls[0] as [number, FormData]
-    expect(tripId).toBe(5)
-    expect(fd.get('reservation_id')).toBe('99')
-    expect(fd.get('description')).toBe('Flight docs')
-    expect((fd.get('file') as File).name).toBe('a.pdf')
+    await waitFor(() => expect(planner.handleSaveReservation).toHaveBeenCalledTimes(1))
+    expect((savedPayload(planner)._pendingFiles as File[]).map(f => f.name)).toEqual(['a.pdf', 'b.pdf'])
+    expect(savedPayload(planner)._onReservationSaved).toEqual(expect.any(Function))
+    expect(savedPayload(planner)._onFileUploaded).toEqual(expect.any(Function))
+    expect(planner.tripActions.addFile).not.toHaveBeenCalled()
   })
 
   it('FE-MOB-RESSH-037: files attached while editing a booking are uploaded against it (#2534)', async () => {
@@ -730,12 +729,9 @@ describe('MReservationSheet', () => {
     fireEvent.change(input, { target: { files: [new File(['a'], 'a.pdf'), new File(['b'], 'b.pdf')] } })
     fireEvent.click(submitBtn())
 
-    await waitFor(() => expect(planner.tripActions.addFile).toHaveBeenCalledTimes(2))
-    const [tripId, fd] = vi.mocked(planner.tripActions.addFile).mock.calls[1] as [number, FormData]
-    expect(tripId).toBe(5)
-    expect(fd.get('reservation_id')).toBe('55')
-    expect(fd.get('description')).toBe('Dinner')
-    expect((fd.get('file') as File).name).toBe('b.pdf')
+    await waitFor(() => expect(planner.handleSaveReservation).toHaveBeenCalledTimes(1))
+    expect((savedPayload(planner)._pendingFiles as File[]).map(f => f.name)).toEqual(['a.pdf', 'b.pdf'])
+    expect(planner.tripActions.addFile).not.toHaveBeenCalled()
   })
 
   it('FE-MOB-RESSH-037b: a failed edit keeps the attached files off the server', async () => {
@@ -820,9 +816,9 @@ describe('MReservationSheet', () => {
     expect(screen.queryByText('a.pdf')).not.toBeInTheDocument()
     fireEvent.click(submitBtn())
 
-    await waitFor(() => expect(planner.tripActions.addFile).toHaveBeenCalledTimes(1))
-    const [, fd] = vi.mocked(planner.tripActions.addFile).mock.calls[0] as [number, FormData]
-    expect((fd.get('file') as File).name).toBe('b.pdf')
+    await waitFor(() => expect(planner.handleSaveReservation).toHaveBeenCalledTimes(1))
+    expect((savedPayload(planner)._pendingFiles as File[]).map(f => f.name)).toEqual(['b.pdf'])
+    expect(planner.tripActions.addFile).not.toHaveBeenCalled()
   })
 
   it('FE-MOB-RESSH-047: picking the date after the time keeps the time', async () => {

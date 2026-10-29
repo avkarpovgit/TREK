@@ -26,7 +26,7 @@ import { typeInfo } from './bookings/bookingsModel'
 import type { StatusTone } from './bookings/bookingParts'
 import { RESERVATION_TYPE_OPTIONS as TYPE_OPTIONS, reservationFieldsFrom, reservationFieldsFromPrefill, selectedDayDate } from './reservationFormModel'
 import { useReservationForm } from './useReservationForm'
-import { expenseRequestAfterSave, pendingImportExpense, travelerIdsOf, travelersChanged, filesNeedConnection, uploadBookingFiles } from './bookingFormModel'
+import { expenseRequestAfterSave, pendingImportExpense, travelerIdsOf, travelersChanged, filesNeedConnection } from './bookingFormModel'
 import { useBookingExpenseIntent } from './useBookingExpenseIntent'
 import { useBookingFileAttach } from './useBookingFileAttach'
 import StayPinStatus from './StayPinStatus'
@@ -70,6 +70,8 @@ export function ReservationModal({ isOpen, onClose, onSave, reservation, days, p
   const { t, locale } = useTranslation()
   const fileInputRef = useRef(null)
   const titleId = useId()
+  const savedDraftId = useRef<number | null>(null)
+  useEffect(() => { savedDraftId.current = null }, [isOpen, reservation, prefill])
 
   const isBudgetEnabled = useAddonStore(s => s.isEnabled('budget'))
   const deleteBudgetItem = useTripStore(s => s.deleteBudgetItem)
@@ -84,7 +86,7 @@ export function ReservationModal({ isOpen, onClose, onSave, reservation, days, p
     isEndBeforeStart, endTimeBeforeStartTime, dateBounds: tripDateRange, startDate, startTime, setStartDate, setStartTime, takeStopDay,
     pickPlace, pickHotelPlace, pickHotelStart, pickHotelEnd, stayPin, saveData: buildSaveData,
   } = useReservationForm(EMPTY_FORM, days, places)
-  const attach = useBookingFileAttach({ reservation, files, onFileUpload, setPendingFiles, toast, t })
+  const attach = useBookingFileAttach({ reservation, files, onFileUpload, setPendingFiles, toast, t, deferUpload: true })
 
   const assignmentOptions = useMemo(
     () => buildAssignmentOptions(days, assignments, t, locale),
@@ -135,14 +137,24 @@ export function ReservationModal({ isOpen, onClose, onSave, reservation, days, p
     if (filesNeedConnection(pendingFiles, !!onFileUpload)) { toast.error(t('reservations.filesNeedConnection')); return }
     setIsSaving(true)
     try {
-      const saveData = buildSaveData({ assignmentId: form.assignment_id, isEdit: !!reservation?.id, withCheckInEnd: true })
+      const saveData = buildSaveData({ assignmentId: form.assignment_id, isEdit: !!reservation?.id || !!savedDraftId.current, withCheckInEnd: true })
+      const extras = saveData as Record<string, unknown>
+      if (savedDraftId.current) extras._retryReservationId = savedDraftId.current
+      if (pendingFiles.length > 0 && onFileUpload) {
+        extras._pendingFiles = pendingFiles
+        // Keep the saved ID and only the remaining files if an upload fails.
+        // Retrying must update the booking, not create another one.
+        extras._onReservationSaved = (saved: Reservation) => { savedDraftId.current = saved.id }
+        extras._onFileUploaded = (file: File) => setPendingFiles(prev => prev.filter(f => f !== file))
+      }
       // Imported booking → auto-create the linked cost from the parsed price (what the
       // old direct import did). Only on create (not edit) and only when there's a price.
-      if (!reservation && prefill && isBudgetEnabled) {
+      if (!reservation && !savedDraftId.current && prefill && isBudgetEnabled) {
         const entry = importedPriceEntry(prefill.metadata, form.type)
         if (entry) saveData.create_budget_entry = entry
       }
       const saved = await onSave(saveData as Record<string, string | number | null> & { title: string })
+      if (saved?.id) savedDraftId.current = null
       // Persist the traveler assignment once we have the reservation id (create → save
       // result, edit → existing reservation), and only when it actually changed (#1517).
       const savedId = saved?.id ?? reservation?.id
@@ -151,9 +163,6 @@ export function ReservationModal({ isOpen, onClose, onSave, reservation, days, p
         if (changed) {
           try { await setReservationTravelers(tripId, savedId, nextIds) } catch { toast.error(t('common.unknownError')) }
         }
-      }
-      if (!reservation?.id && saved?.id && pendingFiles.length > 0) {
-        await uploadBookingFiles(onFileUpload, saved.id, pendingFiles, form.title)
       }
       // Open the Costs editor for the saved booking when the user asked to
       // create/edit its linked expense (gated on saved?.id).
